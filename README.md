@@ -13,19 +13,50 @@ pip install git+https://github.com/turfptax/cortex.git
 cortex-cli ping
 ```
 
-## Claude Code Setup
+> **Windows note:** If `cortex-cli` is not found after install, pip may have installed it to a directory not on your PATH. Run `python -m sysconfig` and look for the `scripts` path, then either add it to PATH or use the full path (e.g. `C:\Users\YOU\...\Scripts\cortex-cli.exe`).
+
+## Setup
+
+### Automatic setup (recommended)
+
+The `cortex-cli setup` command auto-detects the `cortex-mcp` executable path and writes the config for you:
+
+```bash
+# Configure Claude Code
+cortex-cli setup
+
+# Configure Claude Desktop
+cortex-cli setup --target claude-desktop
+```
+
+### Claude Code (manual)
+
+From a terminal (not inside Claude Code):
 
 ```bash
 claude mcp add cortex -- cortex-mcp
 ```
 
-With an explicit serial port:
+Or if `cortex-mcp` is not on PATH, use the full path:
 
 ```bash
-claude mcp add cortex -e CORTEX_PORT=COM5 -- cortex-mcp
+claude mcp add cortex -- C:\Users\YOU\...\Scripts\cortex-mcp.exe
 ```
 
-## Claude Desktop Setup
+If you're already inside Claude Code and can't run `claude mcp add`, edit `~/.claude.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "C:\\Users\\YOU\\...\\Scripts\\cortex-mcp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+### Claude Desktop (manual)
 
 Add to your `claude_desktop_config.json`:
 
@@ -39,19 +70,25 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-Or with an explicit port:
+### Verify
 
-```json
-{
-  "mcpServers": {
-    "cortex": {
-      "command": "cortex-mcp",
-      "env": {
-        "CORTEX_PORT": "COM5"
-      }
-    }
-  }
-}
+After setup, restart Claude Code/Desktop, then verify the connection:
+
+```bash
+cortex-cli ping
+```
+
+The serial port is auto-detected (ESP32-S3 USB VID `0x303A`). If auto-detection fails, set the port explicitly:
+
+```bash
+cortex-cli --port COM5 ping
+```
+
+Or via environment variable:
+
+```bash
+set CORTEX_PORT=COM5       # Windows
+export CORTEX_PORT=/dev/ttyACM0  # Linux/Mac
 ```
 
 ## CLI Reference
@@ -59,6 +96,10 @@ Or with an explicit port:
 The `cortex-cli` tool lets any AI (or human) interact with Cortex via shell commands.
 
 ```bash
+# Setup
+cortex-cli setup                   # Auto-configure Claude Code
+cortex-cli setup --target claude-desktop  # Auto-configure Claude Desktop
+
 # Connectivity
 cortex-cli ping                    # Test round-trip to Cortex Core
 cortex-cli status                  # Get Pi status (uptime, storage)

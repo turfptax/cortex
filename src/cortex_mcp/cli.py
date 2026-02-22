@@ -8,8 +8,11 @@ Usage:
 """
 
 import json
+import os
+import shutil
 import socket
 import platform
+from pathlib import Path
 
 import click
 
@@ -193,6 +196,90 @@ def info():
         click.echo("\nAuto-detected ESP32: {}".format(auto))
     else:
         click.echo("\nNo ESP32 auto-detected.")
+
+
+@cli.command()
+@click.option("--target", type=click.Choice(["claude-code", "claude-desktop"]),
+              default="claude-code", help="Which Claude app to configure.")
+def setup(target):
+    """Auto-configure Claude Code or Claude Desktop to use Cortex MCP.
+
+    Detects the cortex-mcp executable path and writes the config file.
+    """
+    # Find cortex-mcp executable
+    mcp_exe = shutil.which("cortex-mcp")
+    if not mcp_exe:
+        # Try common pip script locations on Windows
+        import sysconfig
+        scripts = sysconfig.get_path("scripts")
+        candidate = os.path.join(scripts, "cortex-mcp.exe")
+        if os.path.exists(candidate):
+            mcp_exe = candidate
+        else:
+            candidate = os.path.join(scripts, "cortex-mcp")
+            if os.path.exists(candidate):
+                mcp_exe = candidate
+
+    if not mcp_exe:
+        click.echo("Error: Could not find cortex-mcp executable.", err=True)
+        click.echo("Try: pip install git+https://github.com/turfptax/cortex.git", err=True)
+        raise SystemExit(1)
+
+    # Normalize path
+    mcp_exe = str(Path(mcp_exe).resolve())
+    click.echo("Found cortex-mcp at: {}".format(mcp_exe))
+
+    if target == "claude-code":
+        config_path = Path.home() / ".claude.json"
+
+        # Read existing config or start fresh
+        config = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, ValueError):
+                click.echo("Warning: existing {} is invalid JSON, creating new.".format(config_path))
+
+        # Add/update mcpServers.cortex
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+        config["mcpServers"]["cortex"] = {
+            "command": mcp_exe,
+            "args": [],
+        }
+
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        click.echo("Wrote Claude Code config to: {}".format(config_path))
+        click.echo("\nRestart Claude Code to pick up the new MCP server.")
+
+    elif target == "claude-desktop":
+        if platform.system() == "Windows":
+            config_path = Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
+        elif platform.system() == "Darwin":
+            config_path = Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        else:
+            config_path = Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+
+        config = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, ValueError):
+                click.echo("Warning: existing {} is invalid JSON, creating new.".format(config_path))
+
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+        config["mcpServers"]["cortex"] = {
+            "command": mcp_exe,
+            "args": [],
+        }
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        click.echo("Wrote Claude Desktop config to: {}".format(config_path))
+        click.echo("\nRestart Claude Desktop to pick up the new MCP server.")
+
+    click.echo("\nVerify with: cortex-cli ping")
 
 
 def main():
