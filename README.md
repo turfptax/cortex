@@ -3,8 +3,10 @@
 Cortex is a wearable AI memory system that gives any AI agent persistent memory across sessions. It consists of a USB dongle (ESP32-S3 BLE bridge) and a wearable Pi Zero 2 W that stores notes, sessions, activities, and searches in a local SQLite database.
 
 ```
-AI Agent <--MCP/CLI--> cortex-mcp <--USB Serial--> Cortex Link (ESP32) <--BLE--> Cortex Core (Pi Zero)
+AI Agent <--MCP/CLI--> cortex-mcp ──TCP──> cortex-daemon <--USB Serial--> Cortex Link (ESP32) <--BLE--> Cortex Core (Pi Zero)
 ```
+
+Multiple AI sessions share the same ESP32 through the daemon — no serial port conflicts.
 
 ## Quick Start
 
@@ -126,6 +128,15 @@ cortex-cli query sessions --filters '{"ai_platform":"claude"}'
 
 # Raw protocol
 cortex-cli raw "CMD:ping"
+
+# Daemon management
+cortex-cli daemon status               # Check if daemon is running
+cortex-cli daemon start                # Start daemon in background
+cortex-cli daemon start --foreground   # Start daemon in foreground
+cortex-cli daemon stop                 # Stop the running daemon
+
+# Direct serial (bypass daemon)
+cortex-cli --direct ping               # Skip daemon, use COM port directly
 ```
 
 ## MCP Tools
@@ -148,6 +159,34 @@ When connected via MCP, these tools are available to the AI agent:
 | `read_responses` | Read buffered async messages |
 | `connection_info` | Show serial port status |
 
+## Multi-Session / Daemon
+
+Only one process can hold a serial port at a time. The **cortex-daemon** solves this by holding the ESP32 serial port and serving multiple clients over TCP.
+
+```
+Claude Code #1 ──stdio──> cortex-mcp ──TCP──┐
+Claude Code #2 ──stdio──> cortex-mcp ──TCP──├──> cortex-daemon ──serial──> ESP32
+Claude Desktop ──stdio──> cortex-mcp ──TCP──┤    (localhost:19750)
+cortex-cli ─────────────────────TCP─────────┘
+```
+
+**The daemon starts automatically** — when `cortex-mcp` or `cortex-cli` runs, it checks for a running daemon and spawns one if needed. No manual setup required.
+
+Manual control:
+
+```bash
+cortex-cli daemon status     # Check daemon state
+cortex-cli daemon start      # Start manually (background)
+cortex-cli daemon stop       # Stop the daemon
+```
+
+To bypass the daemon and use the serial port directly:
+
+```bash
+cortex-cli --direct ping
+CORTEX_DIRECT=1 cortex-mcp   # For MCP server
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -155,6 +194,8 @@ When connected via MCP, these tools are available to the AI agent:
 | `CORTEX_PORT` | auto-detect | Serial port (e.g. `COM5`, `/dev/ttyACM0`) |
 | `CORTEX_BAUD` | `115200` | Baud rate |
 | `CORTEX_TIMEOUT` | `5` | Response timeout in seconds |
+| `CORTEX_DAEMON_PORT` | `19750` | TCP port for the daemon |
+| `CORTEX_DIRECT` | unset | Set to `1` to bypass daemon |
 
 Legacy `KEYMASTER_PORT`, `KEYMASTER_BAUD`, and `KEYMASTER_TIMEOUT` are also supported.
 

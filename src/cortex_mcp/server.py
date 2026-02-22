@@ -3,7 +3,10 @@
 Connects to Cortex Link (ESP32) via USB serial and provides MCP tools
 for AI agents to communicate with Cortex Core (Pi Zero 2 W) over BLE.
 
-Data flow:
+Data flow (with daemon):
+    AI Agent -> MCP Server -> TCP -> cortex-daemon -> USB Serial -> ESP32 -> BLE -> Pi
+
+Data flow (direct, fallback):
     AI Agent -> MCP Server -> USB Serial -> Cortex Link -> BLE -> Cortex Core
 
 Run with:
@@ -12,6 +15,7 @@ Run with:
 """
 
 import json
+import os
 import socket
 import platform
 
@@ -20,8 +24,29 @@ from mcp.server.fastmcp import FastMCP
 from cortex_mcp.bridge import SerialBridge, find_esp32_port, list_ports
 from cortex_mcp.protocol import send_command
 
+
+def _get_bridge():
+    """Get the best available bridge: daemon (preferred) or direct serial.
+
+    Uses daemon by default for shared access. Set CORTEX_DIRECT=1 to
+    bypass the daemon and use the serial port directly.
+    """
+    if os.environ.get("CORTEX_DIRECT"):
+        return SerialBridge()
+
+    try:
+        from cortex_mcp.daemon_client import DaemonBridge, is_daemon_running, ensure_daemon
+        if is_daemon_running() or ensure_daemon():
+            return DaemonBridge()
+    except Exception:
+        pass
+
+    # Daemon unavailable, fall back to direct serial
+    return SerialBridge()
+
+
 # Singleton bridge instance
-_bridge = SerialBridge()
+_bridge = _get_bridge()
 
 # MCP server
 mcp = FastMCP(

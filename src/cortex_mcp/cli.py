@@ -5,6 +5,7 @@ Usage:
     cortex-cli context
     cortex-cli note "My note text" --project cortex --tags idea,important
     cortex-cli query notes --limit 5
+    cortex-cli daemon status
 """
 
 import json
@@ -20,24 +21,55 @@ from cortex_mcp.bridge import SerialBridge, find_esp32_port, list_ports
 from cortex_mcp.protocol import send_command
 
 
-pass_bridge = click.make_pass_decorator(SerialBridge, ensure=True)
+def _get_bridge(ctx):
+    """Get the bridge from context, using daemon or direct serial."""
+    obj = ctx.find_object(dict) or {}
+
+    # If --direct flag or CORTEX_DIRECT env var, use serial directly
+    if obj.get("direct") or os.environ.get("CORTEX_DIRECT"):
+        return SerialBridge(
+            port=obj.get("port"),
+            baud=obj.get("baud"),
+            timeout=obj.get("timeout"),
+        )
+
+    # Try daemon first
+    try:
+        from cortex_mcp.daemon_client import DaemonBridge, is_daemon_running, ensure_daemon
+        if is_daemon_running() or ensure_daemon(
+            serial_port=obj.get("port"),
+            baud=obj.get("baud"),
+            timeout=obj.get("timeout"),
+        ):
+            return DaemonBridge()
+    except Exception:
+        pass
+
+    # Fall back to direct serial
+    return SerialBridge(
+        port=obj.get("port"),
+        baud=obj.get("baud"),
+        timeout=obj.get("timeout"),
+    )
 
 
 @click.group()
 @click.option("--port", envvar="CORTEX_PORT", default=None, help="Serial port (auto-detects ESP32).")
 @click.option("--baud", envvar="CORTEX_BAUD", default=115200, type=int, help="Baud rate.")
 @click.option("--timeout", envvar="CORTEX_TIMEOUT", default=5.0, type=float, help="Response timeout in seconds.")
+@click.option("--direct", is_flag=True, default=False, help="Bypass daemon, use serial port directly.")
 @click.pass_context
-def cli(ctx, port, baud, timeout):
+def cli(ctx, port, baud, timeout, direct):
     """Cortex CLI - interact with Cortex Core via Cortex Link (ESP32)."""
     ctx.ensure_object(dict)
-    ctx.obj = SerialBridge(port=port, baud=baud, timeout=timeout)
+    ctx.obj = {"port": port, "baud": baud, "timeout": timeout, "direct": direct}
 
 
 @cli.command()
-@click.pass_obj
-def ping(bridge):
+@click.pass_context
+def ping(ctx):
     """Test round-trip connectivity to Cortex Core."""
+    bridge = _get_bridge(ctx)
     try:
         lines = bridge.send_and_wait("CMD:ping", timeout=5)
         if lines:
@@ -51,16 +83,18 @@ def ping(bridge):
 
 
 @cli.command()
-@click.pass_obj
-def status(bridge):
+@click.pass_context
+def status(ctx):
     """Get Cortex Core status (uptime, storage, recording state)."""
+    bridge = _get_bridge(ctx)
     click.echo(send_command(bridge, "status", timeout=5))
 
 
 @cli.command()
-@click.pass_obj
-def context(bridge):
+@click.pass_context
+def context(ctx):
     """Get full context for starting an AI session."""
+    bridge = _get_bridge(ctx)
     click.echo(send_command(bridge, "get_context", timeout=20))
 
 
@@ -71,9 +105,10 @@ def context(bridge):
 @click.option("--type", "note_type", default="note",
               type=click.Choice(["note", "decision", "bug", "reminder", "idea", "todo", "context"]),
               help="Note type.")
-@click.pass_obj
-def note(bridge, content, tags, project, note_type):
+@click.pass_context
+def note(ctx, content, tags, project, note_type):
     """Store a note on Cortex Core."""
+    bridge = _get_bridge(ctx)
     payload = {"content": content}
     if tags:
         payload["tags"] = tags
@@ -89,9 +124,10 @@ def note(bridge, content, tags, project, note_type):
 @click.option("--details", "-d", default="", help="Activity description.")
 @click.option("--file", "file_path", default="", help="File path being worked on.")
 @click.option("--project", "-p", default="", help="Project tag.")
-@click.pass_obj
-def activity(bridge, program, details, file_path, project):
+@click.pass_context
+def activity(ctx, program, details, file_path, project):
     """Log an activity (what program/file you're working on)."""
+    bridge = _get_bridge(ctx)
     payload = {"program": program}
     if details:
         payload["details"] = details
@@ -107,9 +143,10 @@ def activity(bridge, program, details, file_path, project):
 @click.option("--source", "-s", default="web", help="Search source (google, github, etc.).")
 @click.option("--url", "-u", default="", help="URL of the result.")
 @click.option("--project", "-p", default="", help="Project tag.")
-@click.pass_obj
-def search(bridge, query_text, source, url, project):
+@click.pass_context
+def search(ctx, query_text, source, url, project):
     """Log a search query."""
+    bridge = _get_bridge(ctx)
     payload = {"query": query_text, "source": source}
     if url:
         payload["url"] = url
@@ -126,9 +163,10 @@ def session():
 
 @session.command("start")
 @click.option("--platform", "ai_platform", default="claude", help="AI platform name.")
-@click.pass_obj
-def session_start(bridge, ai_platform):
+@click.pass_context
+def session_start(ctx, ai_platform):
     """Start a new Cortex session."""
+    bridge = _get_bridge(ctx)
     payload = {
         "ai_platform": ai_platform,
         "hostname": socket.gethostname(),
@@ -141,9 +179,10 @@ def session_start(bridge, ai_platform):
 @click.argument("session_id")
 @click.argument("summary")
 @click.option("--projects", default="", help="Comma-separated project tags.")
-@click.pass_obj
-def session_end(bridge, session_id, summary, projects):
+@click.pass_context
+def session_end(ctx, session_id, summary, projects):
     """End a Cortex session with a summary."""
+    bridge = _get_bridge(ctx)
     payload = {"session_id": session_id, "summary": summary}
     if projects:
         payload["projects"] = projects
@@ -155,9 +194,10 @@ def session_end(bridge, session_id, summary, projects):
 @click.option("--filters", "-f", default="", help='JSON filters, e.g. \'{"project":"cortex"}\'.')
 @click.option("--limit", "-n", default=10, type=int, help="Max results.")
 @click.option("--order-by", default="created_at DESC", help="SQL ORDER BY clause.")
-@click.pass_obj
-def query(bridge, table, filters, limit, order_by):
+@click.pass_context
+def query(ctx, table, filters, limit, order_by):
     """Query the Cortex database."""
+    bridge = _get_bridge(ctx)
     payload = {"table": table, "limit": limit, "order_by": order_by}
     if filters:
         try:
@@ -170,9 +210,10 @@ def query(bridge, table, filters, limit, order_by):
 
 @cli.command()
 @click.argument("message")
-@click.pass_obj
-def raw(bridge, message):
+@click.pass_context
+def raw(ctx, message):
     """Send a raw message to Cortex Link."""
+    bridge = _get_bridge(ctx)
     lines = bridge.send_and_wait(message, timeout=5)
     if lines:
         click.echo("\n".join(lines))
@@ -197,6 +238,117 @@ def info():
     else:
         click.echo("\nNo ESP32 auto-detected.")
 
+    # Check daemon status
+    try:
+        from cortex_mcp.daemon_client import is_daemon_running, DaemonBridge
+        if is_daemon_running():
+            db = DaemonBridge()
+            info_data = db._get_info()
+            click.echo("\nDaemon: running (PID {})".format(info_data.get("pid", "?")))
+            click.echo("  Serial: {} @ {}".format(
+                info_data.get("port", "?"),
+                info_data.get("baud", "?"),
+            ))
+            click.echo("  Clients served: {}".format(info_data.get("clients_served", 0)))
+        else:
+            click.echo("\nDaemon: not running")
+    except Exception:
+        click.echo("\nDaemon: not running")
+
+
+# -- Daemon subcommands --
+
+@cli.group()
+def daemon():
+    """Manage the Cortex daemon (shared serial port server)."""
+    pass
+
+
+@daemon.command("start")
+@click.option("--background/--foreground", default=True,
+              help="Run in background (default) or foreground.")
+@click.pass_context
+def daemon_start(ctx, background):
+    """Start the Cortex daemon."""
+    from cortex_mcp.daemon_client import is_daemon_running
+
+    if is_daemon_running():
+        click.echo("Daemon is already running.")
+        return
+
+    obj = ctx.find_object(dict) or {}
+
+    if background:
+        from cortex_mcp.daemon_client import ensure_daemon
+        click.echo("Starting daemon in background...")
+        if ensure_daemon(
+            serial_port=obj.get("port"),
+            baud=obj.get("baud"),
+            timeout=obj.get("timeout"),
+        ):
+            click.echo("Daemon started successfully.")
+        else:
+            click.echo("Failed to start daemon.", err=True)
+            raise SystemExit(1)
+    else:
+        # Run in foreground (blocks)
+        from cortex_mcp.daemon import CortexDaemon
+        d = CortexDaemon(
+            serial_port=obj.get("port"),
+            baud=obj.get("baud"),
+            timeout=obj.get("timeout"),
+        )
+        d.run()
+
+
+@daemon.command("stop")
+def daemon_stop():
+    """Stop the running Cortex daemon."""
+    from cortex_mcp.daemon_client import is_daemon_running, DaemonBridge
+
+    if not is_daemon_running():
+        click.echo("Daemon is not running.")
+        return
+
+    db = DaemonBridge()
+    resp = db._request({"cmd": "shutdown"}, timeout=3)
+    if resp.get("ok"):
+        click.echo("Daemon shutdown requested.")
+    else:
+        click.echo("Error: {}".format(resp.get("error", "Unknown")), err=True)
+
+
+@daemon.command("status")
+def daemon_status():
+    """Check if the Cortex daemon is running."""
+    from cortex_mcp.daemon_client import is_daemon_running, DaemonBridge
+    from cortex_mcp.daemon import read_lock_file
+
+    if is_daemon_running():
+        db = DaemonBridge()
+        info_data = db._get_info()
+        click.echo("Daemon: running")
+        click.echo("  PID:      {}".format(info_data.get("pid", "?")))
+        click.echo("  Serial:   {} @ {}".format(
+            info_data.get("port", "?"),
+            info_data.get("baud", "?"),
+        ))
+        click.echo("  Connected: {}".format(info_data.get("connected", False)))
+        click.echo("  Buffered:  {}".format(info_data.get("buffered", 0)))
+        click.echo("  Served:    {} requests".format(info_data.get("clients_served", 0)))
+        uptime = info_data.get("uptime", 0)
+        if uptime:
+            mins = int(uptime // 60)
+            secs = int(uptime % 60)
+            click.echo("  Uptime:    {}m {}s".format(mins, secs))
+    else:
+        click.echo("Daemon: not running")
+        lock = read_lock_file()
+        if lock:
+            click.echo("  (stale lock file found, PID {})".format(lock.get("pid")))
+
+
+# -- Setup command --
 
 @cli.command()
 @click.option("--target", type=click.Choice(["claude-code", "claude-desktop"]),
