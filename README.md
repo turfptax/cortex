@@ -172,6 +172,8 @@ cortex-cli ─────────────────────TCP─
 
 **The daemon starts automatically** — when `cortex-mcp` or `cortex-cli` runs, it checks for a running daemon and spawns one if needed. No manual setup required.
 
+The daemon binds to `127.0.0.1` only (never exposed to the network) and uses a per-session auth token stored in `~/.cortex-daemon.secret` (mode 0600). Other processes on the same machine cannot send commands without the token.
+
 Manual control:
 
 ```bash

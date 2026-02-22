@@ -25,6 +25,7 @@ from cortex_mcp.daemon import (
     get_daemon_host,
     get_daemon_port,
     read_lock_file,
+    read_secret,
     is_pid_alive,
 )
 
@@ -40,9 +41,14 @@ class DaemonBridge:
         self._host = host or get_daemon_host()
         self._port = port or get_daemon_port()
         self._cached_info = None
+        self._token = read_secret() or ""
 
     def _request(self, data, timeout=10):
         """Send a JSON request to the daemon and return the response dict."""
+        # Inject auth token into every request
+        data = dict(data)
+        data["token"] = self._token
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout + 2)  # TCP timeout slightly longer than command timeout
         try:
@@ -150,17 +156,19 @@ class DaemonBridge:
 def is_daemon_running(host=None, port=None):
     """Check if the cortex-daemon is running and accepting connections.
 
-    First checks the lock file for a PID, then attempts a TCP ping.
+    Sends an authenticated ping to verify the daemon is alive and we
+    have a valid token.
     """
     host = host or get_daemon_host()
     port = port or get_daemon_port()
+    token = read_secret() or ""
 
-    # Quick check: try TCP ping
+    # Try authenticated TCP ping
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
         sock.connect((host, port))
-        line = json.dumps({"cmd": "ping"}) + "\n"
+        line = json.dumps({"cmd": "ping", "token": token}) + "\n"
         sock.sendall(line.encode("utf-8"))
         buf = b""
         while b"\n" not in buf:

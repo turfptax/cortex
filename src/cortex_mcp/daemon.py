@@ -16,9 +16,11 @@ TCP Protocol (JSON-over-TCP, newline-delimited):
 
 import json
 import os
+import secrets
 import signal
 import socket
 import socketserver
+import stat
 import sys
 import threading
 import time
@@ -26,10 +28,12 @@ from pathlib import Path
 
 from cortex_mcp.bridge import SerialBridge, find_esp32_port, list_ports
 
+# Always localhost — never expose daemon to the network.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 19750
 
 LOCK_FILE = Path.home() / ".cortex-daemon.lock"
+SECRET_FILE = Path.home() / ".cortex-daemon.secret"
 
 
 def get_daemon_port():
@@ -38,8 +42,31 @@ def get_daemon_port():
 
 
 def get_daemon_host():
-    """Get daemon host from env or default."""
-    return os.environ.get("CORTEX_DAEMON_HOST", DEFAULT_HOST)
+    """Always returns localhost. The daemon never binds to external interfaces."""
+    return DEFAULT_HOST
+
+
+def _generate_secret():
+    """Generate a new random auth token and write it to SECRET_FILE.
+
+    File permissions are restricted to the current user (mode 0600 on
+    Unix, ACL on Windows).
+    """
+    token = secrets.token_hex(32)
+    SECRET_FILE.write_text(token + "\n", encoding="utf-8")
+    try:
+        SECRET_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    except OSError:
+        pass  # Windows may not support chmod; ACL is still user-only
+    return token
+
+
+def read_secret():
+    """Read the daemon auth token from SECRET_FILE. Returns str or None."""
+    try:
+        return SECRET_FILE.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return None
 
 
 class DaemonHandler(socketserver.StreamRequestHandler):
@@ -63,6 +90,12 @@ class DaemonHandler(socketserver.StreamRequestHandler):
                 request = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
                 self._respond({"ok": False, "error": "Invalid JSON"})
+                return
+
+            # Authenticate: every request must include the correct token
+            token = request.get("token", "")
+            if not self.server.daemon.check_token(token):
+                self._respond({"ok": False, "error": "Authentication failed"})
                 return
 
             cmd = request.get("cmd", "")
@@ -106,6 +139,11 @@ class CortexDaemon:
         self._server = None
         self._clients_served = 0
         self._start_time = None
+        self._token = _generate_secret()
+
+    def check_token(self, token):
+        """Validate a client's auth token using constant-time comparison."""
+        return secrets.compare_digest(token, self._token)
 
     def handle_command(self, cmd, request):
         """Process a client command under the serial lock."""
@@ -215,6 +253,7 @@ class CortexDaemon:
         except Exception:
             pass
         _remove_lock_file()
+        _remove_secret_file()
         print("Done.")
 
 
@@ -233,6 +272,14 @@ def _remove_lock_file():
     """Remove the daemon lock file."""
     try:
         LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _remove_secret_file():
+    """Remove the daemon secret file."""
+    try:
+        SECRET_FILE.unlink(missing_ok=True)
     except Exception:
         pass
 
