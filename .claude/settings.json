@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__cortex__ping",
+      "mcp__cortex__get_status",
+      "mcp__cortex__send_note",
+      "mcp__cortex__log_activity",
+      "mcp__cortex__log_search",
+      "mcp__cortex__session_start",
+      "mcp__cortex__session_end",
+      "mcp__cortex__get_context",
+      "mcp__cortex__query",
+      "mcp__cortex__register_computer",
+      "mcp__cortex__send_message",
+      "mcp__cortex__read_responses",
+      "mcp__cortex__connection_info"
+    ]
+  }
+}
