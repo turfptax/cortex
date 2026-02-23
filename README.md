@@ -12,47 +12,44 @@ Multiple AI sessions share the same ESP32 through the daemon — no serial port 
 
 ```bash
 pip install git+https://github.com/turfptax/cortex.git
-cortex-cli ping
+python -m cortex_mcp ping
 ```
-
-> **Windows note:** If `cortex-cli` is not found after install, pip may have installed it to a directory not on your PATH. Run `python -m sysconfig` and look for the `scripts` path, then either add it to PATH or use the full path (e.g. `C:\Users\YOU\...\Scripts\cortex-cli.exe`).
 
 ## Setup
 
 ### Automatic setup (recommended)
 
-The `cortex-cli setup` command auto-detects the `cortex-mcp` executable path and writes the config for you:
+The setup command writes the correct config for you. It uses the full Python path, so it works even when pip's Scripts directory isn't on PATH (common on Windows):
 
 ```bash
 # Configure Claude Code
-cortex-cli setup
+python -m cortex_mcp setup
 
 # Configure Claude Desktop
-cortex-cli setup --target claude-desktop
+python -m cortex_mcp setup --target claude-desktop
+
+# Configure both at once
+python -m cortex_mcp setup && python -m cortex_mcp setup --target claude-desktop
 ```
+
+> **Tip:** `cortex-cli setup` also works if pip's Scripts dir is on your PATH.
 
 ### Claude Code (manual)
 
 From a terminal (not inside Claude Code):
 
 ```bash
-claude mcp add cortex -- cortex-mcp
+claude mcp add cortex -- python -m cortex_mcp.server
 ```
 
-Or if `cortex-mcp` is not on PATH, use the full path:
-
-```bash
-claude mcp add cortex -- C:\Users\YOU\...\Scripts\cortex-mcp.exe
-```
-
-If you're already inside Claude Code and can't run `claude mcp add`, edit `~/.claude.json` directly:
+Or edit `~/.claude.json` directly:
 
 ```json
 {
   "mcpServers": {
     "cortex": {
-      "command": "C:\\Users\\YOU\\...\\Scripts\\cortex-mcp.exe",
-      "args": []
+      "command": "python",
+      "args": ["-m", "cortex_mcp.server"]
     }
   }
 }
@@ -62,28 +59,35 @@ If you're already inside Claude Code and can't run `claude mcp add`, edit `~/.cl
 
 Add to your `claude_desktop_config.json`:
 
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
 ```json
 {
   "mcpServers": {
     "cortex": {
-      "command": "cortex-mcp"
+      "command": "python",
+      "args": ["-m", "cortex_mcp.server"]
     }
   }
 }
 ```
+
+> **Note:** If you have multiple Python versions, use the full path to the Python that has cortex-mcp installed (e.g. `C:\\Users\\YOU\\AppData\\Local\\Programs\\Python\\Python313\\python.exe`). The automatic setup command handles this for you.
 
 ### Verify
 
 After setup, restart Claude Code/Desktop, then verify the connection:
 
 ```bash
-cortex-cli ping
+python -m cortex_mcp ping
 ```
 
 The serial port is auto-detected (ESP32-S3 USB VID `0x303A`). If auto-detection fails, set the port explicitly:
 
 ```bash
-cortex-cli --port COM5 ping
+python -m cortex_mcp --port COM5 ping
 ```
 
 Or via environment variable:
@@ -95,48 +99,48 @@ export CORTEX_PORT=/dev/ttyACM0  # Linux/Mac
 
 ## CLI Reference
 
-The `cortex-cli` tool lets any AI (or human) interact with Cortex via shell commands.
+All commands work with either `cortex-cli` (if on PATH) or `python -m cortex_mcp`:
 
 ```bash
 # Setup
-cortex-cli setup                   # Auto-configure Claude Code
-cortex-cli setup --target claude-desktop  # Auto-configure Claude Desktop
+python -m cortex_mcp setup                          # Auto-configure Claude Code
+python -m cortex_mcp setup --target claude-desktop   # Auto-configure Claude Desktop
 
 # Connectivity
-cortex-cli ping                    # Test round-trip to Cortex Core
-cortex-cli status                  # Get Pi status (uptime, storage)
-cortex-cli context                 # Get full context (sessions, notes, bugs)
-cortex-cli info                    # Show serial ports and connection status
+python -m cortex_mcp ping                    # Test round-trip to Cortex Core
+python -m cortex_mcp status                  # Get Pi status (uptime, storage)
+python -m cortex_mcp context                 # Get full context (sessions, notes, bugs)
+python -m cortex_mcp info                    # Show serial ports and connection status
 
 # Notes
-cortex-cli note "My note text"
-cortex-cli note "Fix auth bug" --type bug --project myapp --tags auth,urgent
+python -m cortex_mcp note "My note text"
+python -m cortex_mcp note "Fix auth bug" --type bug --project myapp --tags auth,urgent
 
 # Activity logging
-cortex-cli activity "VS Code" --details "Refactoring auth module" --project myapp
+python -m cortex_mcp activity "VS Code" --details "Refactoring auth module" --project myapp
 
 # Search logging
-cortex-cli search "python async patterns" --source google
+python -m cortex_mcp search "python async patterns" --source google
 
 # Sessions
-cortex-cli session start                           # Returns session_id
-cortex-cli session end SESSION_ID "Summary of work" --projects cortex
+python -m cortex_mcp session start                           # Returns session_id
+python -m cortex_mcp session end SESSION_ID "Summary of work" --projects cortex
 
 # Database queries
-cortex-cli query notes --limit 5
-cortex-cli query sessions --filters '{"ai_platform":"claude"}'
+python -m cortex_mcp query notes --limit 5
+python -m cortex_mcp query sessions --filters '{"ai_platform":"claude"}'
 
 # Raw protocol
-cortex-cli raw "CMD:ping"
+python -m cortex_mcp raw "CMD:ping"
 
 # Daemon management
-cortex-cli daemon status               # Check if daemon is running
-cortex-cli daemon start                # Start daemon in background
-cortex-cli daemon start --foreground   # Start daemon in foreground
-cortex-cli daemon stop                 # Stop the running daemon
+python -m cortex_mcp daemon status               # Check if daemon is running
+python -m cortex_mcp daemon start                # Start daemon in background
+python -m cortex_mcp daemon start --foreground   # Start daemon in foreground
+python -m cortex_mcp daemon stop                 # Stop the running daemon
 
 # Direct serial (bypass daemon)
-cortex-cli --direct ping               # Skip daemon, use COM port directly
+python -m cortex_mcp --direct ping               # Skip daemon, use COM port directly
 ```
 
 ## MCP Tools

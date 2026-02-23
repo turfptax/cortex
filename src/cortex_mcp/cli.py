@@ -10,7 +10,6 @@ Usage:
 
 import json
 import os
-import shutil
 import socket
 import platform
 from pathlib import Path
@@ -356,30 +355,20 @@ def daemon_status():
 def setup(target):
     """Auto-configure Claude Code or Claude Desktop to use Cortex MCP.
 
-    Detects the cortex-mcp executable path and writes the config file.
+    Uses the current Python interpreter with -m cortex_mcp.server, which
+    avoids Windows PATH issues (pip Scripts dir often isn't on PATH).
     """
-    # Find cortex-mcp executable
-    mcp_exe = shutil.which("cortex-mcp")
-    if not mcp_exe:
-        # Try common pip script locations on Windows
-        import sysconfig
-        scripts = sysconfig.get_path("scripts")
-        candidate = os.path.join(scripts, "cortex-mcp.exe")
-        if os.path.exists(candidate):
-            mcp_exe = candidate
-        else:
-            candidate = os.path.join(scripts, "cortex-mcp")
-            if os.path.exists(candidate):
-                mcp_exe = candidate
+    import sys
 
-    if not mcp_exe:
-        click.echo("Error: Could not find cortex-mcp executable.", err=True)
-        click.echo("Try: pip install git+https://github.com/turfptax/cortex.git", err=True)
-        raise SystemExit(1)
+    # Use the Python that has cortex-mcp installed (the one running this script)
+    python_exe = str(Path(sys.executable).resolve())
+    click.echo("Using Python: {}".format(python_exe))
 
-    # Normalize path
-    mcp_exe = str(Path(mcp_exe).resolve())
-    click.echo("Found cortex-mcp at: {}".format(mcp_exe))
+    # Build the MCP server entry — portable across all platforms
+    mcp_entry = {
+        "command": python_exe,
+        "args": ["-m", "cortex_mcp.server"],
+    }
 
     if target == "claude-code":
         config_path = Path.home() / ".claude.json"
@@ -395,10 +384,7 @@ def setup(target):
         # Add/update mcpServers.cortex
         if "mcpServers" not in config:
             config["mcpServers"] = {}
-        config["mcpServers"]["cortex"] = {
-            "command": mcp_exe,
-            "args": [],
-        }
+        config["mcpServers"]["cortex"] = mcp_entry
 
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         click.echo("Wrote Claude Code config to: {}".format(config_path))
@@ -421,17 +407,14 @@ def setup(target):
 
         if "mcpServers" not in config:
             config["mcpServers"] = {}
-        config["mcpServers"]["cortex"] = {
-            "command": mcp_exe,
-            "args": [],
-        }
+        config["mcpServers"]["cortex"] = mcp_entry
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         click.echo("Wrote Claude Desktop config to: {}".format(config_path))
         click.echo("\nRestart Claude Desktop to pick up the new MCP server.")
 
-    click.echo("\nVerify with: cortex-cli ping")
+    click.echo("\nVerify with: python -m cortex_mcp ping")
 
 
 def main():
