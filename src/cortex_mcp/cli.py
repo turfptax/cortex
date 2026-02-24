@@ -21,7 +21,7 @@ from cortex_mcp.protocol import send_command
 
 
 def _get_bridge(ctx):
-    """Get the bridge from context, using daemon or direct serial."""
+    """Get the bridge: WiFi (preferred) -> daemon -> direct serial."""
     obj = ctx.find_object(dict) or {}
 
     # If --direct flag or CORTEX_DIRECT env var, use serial directly
@@ -32,7 +32,16 @@ def _get_bridge(ctx):
             timeout=obj.get("timeout"),
         )
 
-    # Try daemon first
+    # Try WiFi first (direct HTTP to Pi, bypasses ESP32 BLE chain)
+    if not os.environ.get("CORTEX_NO_WIFI"):
+        try:
+            from cortex_mcp.wifi_bridge import WiFiBridge, is_pi_reachable, get_wifi_token
+            if get_wifi_token() and is_pi_reachable(timeout=1.0):
+                return WiFiBridge()
+        except Exception:
+            pass
+
+    # Try daemon
     try:
         from cortex_mcp.daemon_client import DaemonBridge, is_daemon_running, ensure_daemon
         if is_daemon_running() or ensure_daemon(
@@ -345,6 +354,99 @@ def daemon_status():
         lock = read_lock_file()
         if lock:
             click.echo("  (stale lock file found, PID {})".format(lock.get("pid")))
+
+
+# -- Files commands (WiFi only) --
+
+@cli.group()
+def files():
+    """Browse and download files from Cortex Core (WiFi only)."""
+    pass
+
+
+@files.command("list")
+@click.argument("category", type=click.Choice(["recordings", "notes", "logs", "uploads"]))
+@click.pass_context
+def files_list(ctx, category):
+    """List files in a category on the Pi."""
+    bridge = _get_bridge(ctx)
+    if not hasattr(bridge, "list_files"):
+        click.echo("Error: File operations require WiFi connection to Pi.", err=True)
+        raise SystemExit(1)
+    try:
+        result = bridge.list_files(category)
+        files = result.get("files", [])
+        if not files:
+            click.echo("No files in '{}'.".format(category))
+            return
+        for f in files:
+            size = f.get("size", 0)
+            if size > 1_048_576:
+                size_str = "{:.1f}MB".format(size / 1_048_576)
+            elif size > 1024:
+                size_str = "{:.0f}KB".format(size / 1024)
+            else:
+                size_str = "{}B".format(size)
+            click.echo("  {:>8s}  {}  {}".format(size_str, f.get("mtime", "")[:19], f["name"]))
+        click.echo("\n{} files".format(len(files)))
+    except Exception as e:
+        click.echo("Error: {}".format(e), err=True)
+
+
+@files.command("download")
+@click.argument("category", type=click.Choice(["recordings", "notes", "logs", "uploads"]))
+@click.argument("filename")
+@click.option("--output", "-o", default=".", help="Local output directory.")
+@click.pass_context
+def files_download(ctx, category, filename, output):
+    """Download a file from the Pi."""
+    bridge = _get_bridge(ctx)
+    if not hasattr(bridge, "download_file"):
+        click.echo("Error: File operations require WiFi connection to Pi.", err=True)
+        raise SystemExit(1)
+    local_path = os.path.join(output, filename)
+    try:
+        click.echo("Downloading {} -> {}".format(filename, local_path))
+        bridge.download_file(category, filename, local_path)
+        size = os.path.getsize(local_path)
+        click.echo("Done ({:.1f} KB)".format(size / 1024))
+    except Exception as e:
+        click.echo("Error: {}".format(e), err=True)
+
+
+@files.command("upload")
+@click.argument("local_file", type=click.Path(exists=True))
+@click.pass_context
+def files_upload(ctx, local_file):
+    """Upload a file to the Pi's uploads directory."""
+    bridge = _get_bridge(ctx)
+    if not hasattr(bridge, "upload_file"):
+        click.echo("Error: File operations require WiFi connection to Pi.", err=True)
+        raise SystemExit(1)
+    try:
+        click.echo("Uploading {} ...".format(local_file))
+        result = bridge.upload_file(local_file)
+        click.echo("Done: {} ({} bytes)".format(result.get("filename"), result.get("size")))
+    except Exception as e:
+        click.echo("Error: {}".format(e), err=True)
+
+
+@files.command("db")
+@click.option("--output", "-o", default="cortex.db", help="Local output path.")
+@click.pass_context
+def files_db(ctx, output):
+    """Download the cortex.db database from the Pi."""
+    bridge = _get_bridge(ctx)
+    if not hasattr(bridge, "download_db"):
+        click.echo("Error: Database download requires WiFi connection to Pi.", err=True)
+        raise SystemExit(1)
+    try:
+        click.echo("Downloading cortex.db -> {}".format(output))
+        bridge.download_db(output)
+        size = os.path.getsize(output)
+        click.echo("Done ({:.1f} KB)".format(size / 1024))
+    except Exception as e:
+        click.echo("Error: {}".format(e), err=True)
 
 
 # -- Setup command --

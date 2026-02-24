@@ -26,14 +26,28 @@ from cortex_mcp.protocol import send_command
 
 
 def _get_bridge():
-    """Get the best available bridge: daemon (preferred) or direct serial.
+    """Get the best available bridge: WiFi (preferred) -> daemon -> direct serial.
 
-    Uses daemon by default for shared access. Set CORTEX_DIRECT=1 to
-    bypass the daemon and use the serial port directly.
+    WiFi is fastest (direct HTTP to Pi, no BLE relay). Falls back to
+    BLE chain if Pi WiFi is unreachable.
+
+    Environment variables:
+        CORTEX_DIRECT=1    - Skip WiFi and daemon, use serial directly
+        CORTEX_NO_WIFI=1   - Skip WiFi, use daemon/serial only
     """
     if os.environ.get("CORTEX_DIRECT"):
         return SerialBridge()
 
+    # Try WiFi first (direct to Pi, bypasses ESP32 BLE chain)
+    if not os.environ.get("CORTEX_NO_WIFI"):
+        try:
+            from cortex_mcp.wifi_bridge import WiFiBridge, is_pi_reachable, get_wifi_token
+            if get_wifi_token() and is_pi_reachable(timeout=1.0):
+                return WiFiBridge()
+        except Exception:
+            pass
+
+    # Try daemon (shared serial port)
     try:
         from cortex_mcp.daemon_client import DaemonBridge, is_daemon_running, ensure_daemon
         if is_daemon_running() or ensure_daemon():
@@ -45,14 +59,23 @@ def _get_bridge():
     return SerialBridge()
 
 
-# Singleton bridge instance
-_bridge = _get_bridge()
+# Lazy singleton bridge instance (deferred to avoid 1s WiFi timeout on import)
+_bridge = None
+
+
+def _get_bridge_lazy():
+    """Get or initialize the bridge singleton."""
+    global _bridge
+    if _bridge is None:
+        _bridge = _get_bridge()
+    return _bridge
 
 # MCP server
 mcp = FastMCP(
     "Cortex Bridge",
     instructions=(
-        "Bridge to Cortex Core (Pi Zero 2 W wearable) via Cortex Link (ESP32 BLE). "
+        "Bridge to Cortex Core (Pi Zero 2 W wearable). "
+        "Connects via WiFi (direct HTTP) when available, falls back to BLE via ESP32 USB dongle. "
         "Use these tools to log activities, notes, searches, and manage sessions. "
         "The Core stores all data in a local SQLite database. "
         "Start each conversation with get_context to load previous context."
@@ -68,7 +91,7 @@ def ping() -> str:
     Use this to verify the full chain: Computer -> ESP32 -> BLE -> Pi.
     """
     try:
-        lines = _bridge.send_and_wait("CMD:ping", timeout=5)
+        lines = _get_bridge_lazy().send_and_wait("CMD:ping", timeout=5)
         if lines:
             return "Response: " + " | ".join(lines)
         return "No response (timeout). Check Cortex Link and Core are connected."
@@ -83,7 +106,7 @@ def get_status() -> str:
     Returns uptime, connection info, storage stats, and recording state.
     """
     try:
-        return send_command(_bridge, "status", timeout=5)
+        return send_command(_get_bridge_lazy(), "status", timeout=5)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -109,7 +132,7 @@ def send_note(content: str, tags: str = "", project: str = "", note_type: str = 
             payload["project"] = project
         if note_type and note_type != "note":
             payload["type"] = note_type
-        return send_command(_bridge, "note", payload)
+        return send_command(_get_bridge_lazy(), "note", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -135,7 +158,7 @@ def log_activity(program: str, details: str = "", file_path: str = "", project: 
             payload["file_path"] = file_path
         if project:
             payload["project"] = project
-        return send_command(_bridge, "activity", payload)
+        return send_command(_get_bridge_lazy(), "activity", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -158,7 +181,7 @@ def log_search(query: str, url: str = "", source: str = "web", project: str = ""
             payload["url"] = url
         if project:
             payload["project"] = project
-        return send_command(_bridge, "search", payload)
+        return send_command(_get_bridge_lazy(), "search", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -179,7 +202,7 @@ def session_start(ai_platform: str = "claude") -> str:
             "hostname": socket.gethostname(),
             "os_info": "{} {}".format(platform.system(), platform.release()),
         }
-        return send_command(_bridge, "session_start", payload)
+        return send_command(_get_bridge_lazy(), "session_start", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -202,7 +225,7 @@ def session_end(session_id: str, summary: str, projects: str = "") -> str:
         }
         if projects:
             payload["projects"] = projects
-        return send_command(_bridge, "session_end", payload)
+        return send_command(_get_bridge_lazy(), "session_end", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -216,7 +239,7 @@ def get_context() -> str:
     start of every conversation to understand what the user is working on.
     """
     try:
-        return send_command(_bridge, "get_context", timeout=20)
+        return send_command(_get_bridge_lazy(), "get_context", timeout=20)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -240,7 +263,7 @@ def query(table: str, filters: str = "", limit: int = 10, order_by: str = "creat
                 payload["filters"] = json.loads(filters)
             except (json.JSONDecodeError, ValueError):
                 return "Error: 'filters' must be valid JSON (e.g. '{\"project\":\"cortex\"}')"
-        return send_command(_bridge, "query", payload, timeout=10)
+        return send_command(_get_bridge_lazy(), "query", payload, timeout=10)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -260,7 +283,7 @@ def register_computer() -> str:
             ),
             "platform": platform.machine(),
         }
-        return send_command(_bridge, "computer_reg", payload)
+        return send_command(_get_bridge_lazy(), "computer_reg", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
@@ -276,7 +299,7 @@ def send_message(message: str) -> str:
         message: The message to send.
     """
     try:
-        lines = _bridge.send_and_wait(message, timeout=5)
+        lines = _get_bridge_lazy().send_and_wait(message, timeout=5)
         if lines:
             return "\n".join(lines)
         return "Sent (no response)."
@@ -292,8 +315,9 @@ def read_responses() -> str:
     Useful for checking unsolicited data or async responses.
     """
     try:
-        _bridge._ensure_connected()
-        lines = _bridge.read_pending()
+        bridge = _get_bridge_lazy()
+        bridge._ensure_connected()
+        lines = bridge.read_pending()
         if lines:
             return "\n".join(lines)
         return "No pending messages."
@@ -303,14 +327,34 @@ def read_responses() -> str:
 
 @mcp.tool()
 def connection_info() -> str:
-    """Show current serial connection status and available ports.
+    """Show current connection status and available ports.
 
-    Lists detected serial ports and the active connection details.
+    Lists detected serial ports, WiFi status, and the active connection details.
     """
     try:
-        port_list = list_ports()
+        bridge = _get_bridge_lazy()
+        info = ""
 
-        info = "Available ports:\n"
+        # WiFi status
+        try:
+            from cortex_mcp.wifi_bridge import is_pi_reachable, get_pi_host, get_pi_port, get_wifi_token
+            host = get_pi_host()
+            port = get_pi_port()
+            has_token = bool(get_wifi_token())
+            if has_token and is_pi_reachable(timeout=1.0):
+                info += "WiFi: connected (http://{}:{})\n".format(host, port)
+            elif has_token:
+                info += "WiFi: unreachable ({}:{})\n".format(host, port)
+            else:
+                info += "WiFi: no token configured\n"
+        except Exception:
+            info += "WiFi: not available\n"
+
+        info += "Active transport: {}\n\n".format(bridge.port_name)
+
+        # Serial ports
+        port_list = list_ports()
+        info += "Available ports:\n"
         if port_list:
             info += "\n".join("  " + p for p in port_list)
         else:
@@ -318,10 +362,11 @@ def connection_info() -> str:
 
         info += "\n\n"
 
-        if _bridge.is_connected:
-            info += "Connected: {}\n".format(_bridge.port_name)
-            info += "Baud: {}\n".format(_bridge.baud_rate)
-            info += "Buffered messages: {}".format(_bridge.buffered_count)
+        if bridge.is_connected:
+            info += "Connected: {}\n".format(bridge.port_name)
+            if bridge.baud_rate:
+                info += "Baud: {}\n".format(bridge.baud_rate)
+            info += "Buffered messages: {}".format(bridge.buffered_count)
         else:
             info += "Status: Not connected"
             auto = find_esp32_port()
