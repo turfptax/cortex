@@ -241,7 +241,7 @@ CORTEX_DIRECT=1 cortex-mcp   # For MCP server
 
 ## Hardware
 
-- **Cortex Link**: ESP32-S3 USB dongle with BLE ([firmware](https://github.com/turfptax/esp32-keymaster))
+- **Cortex Link**: ESP32-S3 USB dongle with BLE ([firmware](https://github.com/turfptax/cortex-link))
 - **Cortex Core**: Pi Zero 2 W with SQLite database, BLE client, optional mic/display
 
 ## Development
