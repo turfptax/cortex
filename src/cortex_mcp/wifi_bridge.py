@@ -209,7 +209,8 @@ class WiFiBridge:
                     break
                 f.write(chunk)
 
-    def upload_file(self, local_path, remote_name=None):
+    def upload_file(self, local_path, remote_name=None, description="",
+                    tags="", project=""):
         """Upload a file to the Pi's uploads directory."""
         filename = remote_name or os.path.basename(local_path)
         with open(local_path, "rb") as f:
@@ -220,6 +221,12 @@ class WiFiBridge:
             req.add_header("Authorization", "Bearer {}".format(self._token))
         req.add_header("X-Filename", filename)
         req.add_header("Content-Length", str(len(data)))
+        if description:
+            req.add_header("X-Description", description)
+        if tags:
+            req.add_header("X-Tags", tags)
+        if project:
+            req.add_header("X-Project", project)
         resp = urllib.request.urlopen(req, timeout=120)
         return json.loads(resp.read())
 

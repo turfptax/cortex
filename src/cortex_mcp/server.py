@@ -251,7 +251,7 @@ def query(table: str, filters: str = "", limit: int = 10, order_by: str = "creat
     Generic query interface for retrieving stored data.
 
     Args:
-        table: Table to query (notes, activities, searches, sessions, projects, computers, people).
+        table: Table to query (notes, activities, searches, sessions, projects, computers, people, files).
         filters: JSON string of filters, e.g. '{"project":"cortex","type":"bug"}'.
         limit: Max results to return (default 10).
         order_by: SQL ORDER BY clause (default "created_at DESC").
@@ -284,6 +284,80 @@ def register_computer() -> str:
             "platform": platform.machine(),
         }
         return send_command(_get_bridge_lazy(), "computer_reg", payload)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def file_register(filename: str, category: str = "uploads", description: str = "",
+                  tags: str = "", project: str = "", mime_type: str = "",
+                  size_bytes: int = 0) -> str:
+    """Register a file in the Cortex database for sharing and discovery.
+
+    Records file metadata so AI agents can find and serve files by context.
+    The file must already exist on the Pi (in the appropriate category directory).
+
+    Args:
+        filename: Name of the file on the Pi.
+        category: File category: recordings, notes, logs, uploads.
+        description: Human-readable description of the file contents.
+        tags: Comma-separated tags for categorization.
+        project: Project tag this file belongs to.
+        mime_type: MIME type (auto-detected if empty).
+        size_bytes: File size in bytes.
+    """
+    try:
+        payload = {"filename": filename, "category": category}
+        if description:
+            payload["description"] = description
+        if tags:
+            payload["tags"] = tags
+        if project:
+            payload["project"] = project
+        if mime_type:
+            payload["mime_type"] = mime_type
+        if size_bytes:
+            payload["size_bytes"] = size_bytes
+        return send_command(_get_bridge_lazy(), "file_register", payload)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def file_list(category: str = "", project: str = "", limit: int = 50) -> str:
+    """List files registered in the Cortex database.
+
+    Returns file metadata including name, description, tags, and download info.
+
+    Args:
+        category: Filter by category (recordings, notes, logs, uploads). Empty for all.
+        project: Filter by project tag. Empty for all.
+        limit: Max results (default 50).
+    """
+    try:
+        payload = {"limit": limit}
+        if category:
+            payload["category"] = category
+        if project:
+            payload["project"] = project
+        return send_command(_get_bridge_lazy(), "file_list", payload)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def file_search(query: str, limit: int = 20) -> str:
+    """Search for files by name, description, or tags.
+
+    Searches across filename, description, and tags fields.
+
+    Args:
+        query: Search text to match against file metadata.
+        limit: Max results (default 20).
+    """
+    try:
+        payload = {"query": query, "limit": limit}
+        return send_command(_get_bridge_lazy(), "file_search", payload)
     except Exception as e:
         return "Error: {}".format(e)
 
