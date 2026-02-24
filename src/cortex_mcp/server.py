@@ -74,11 +74,43 @@ def _get_bridge_lazy():
 mcp = FastMCP(
     "Cortex Bridge",
     instructions=(
-        "Bridge to Cortex Core (Pi Zero 2 W wearable). "
-        "Connects via WiFi (direct HTTP) when available, falls back to BLE via ESP32 USB dongle. "
-        "Use these tools to log activities, notes, searches, and manage sessions. "
-        "The Core stores all data in a local SQLite database. "
-        "Start each conversation with get_context to load previous context."
+        "Cortex is a wearable AI memory system. A Pi Zero 2 W (Cortex Core) "
+        "worn by the user stores notes, sessions, activities, searches, and "
+        "files in a local SQLite database. An ESP32-S3 USB dongle (Cortex Link) "
+        "provides BLE connectivity as a fallback.\n\n"
+
+        "TRANSPORT (automatic, no action needed): "
+        "WiFi HTTP (preferred, direct to Pi on port 8420) -> "
+        "TCP daemon (shared serial, localhost:19750) -> "
+        "direct USB serial to ESP32 -> BLE to Pi. "
+        "The active transport is chosen automatically at startup. "
+        "WiFi is 10-100x faster than BLE and supports file transfer. "
+        "Use connection_info to check which transport is active.\n\n"
+
+        "RECOMMENDED WORKFLOW:\n"
+        "1. Call get_context first -- returns active projects, recent sessions, "
+        "pending reminders, open bugs, recent files, and DB stats.\n"
+        "2. Call session_start to register this conversation.\n"
+        "3. Use tools as needed during the session.\n"
+        "4. Call session_end with a summary before the conversation ends.\n\n"
+
+        "CAPABILITIES:\n"
+        "- Notes: send_note (tags, project, type: note/decision/bug/reminder/idea/todo/context)\n"
+        "- Sessions: session_start/session_end (tracks conversations across computers)\n"
+        "- Activities: log_activity (program, file, project tracking)\n"
+        "- Searches: log_search (research history)\n"
+        "- Database: query any table (notes, activities, searches, sessions, "
+        "projects, computers, people, files)\n"
+        "- File metadata: file_register, file_list, file_search\n"
+        "- File transfer (WiFi only): file_upload (local -> Pi), "
+        "file_download (Pi -> local)\n"
+        "- Diagnostics: ping, get_status, connection_info\n\n"
+
+        "FILE OPERATIONS: Files on the Pi are organized by category: "
+        "recordings, notes, logs, uploads. Use file_upload to send a file "
+        "from this computer to the Pi over WiFi (auto-registers in DB). "
+        "Use file_download to retrieve files. file_register records metadata "
+        "for files already on the Pi. File transfer requires WiFi transport."
     ),
 )
 
@@ -116,6 +148,7 @@ def send_note(content: str, tags: str = "", project: str = "", note_type: str = 
     """Send a text note to the Pi Zero for storage.
 
     Notes are timestamped and stored on the Pi's SD card for future analysis.
+    Notes of any length are supported -- the transport handles chunking automatically.
 
     Args:
         content: The note text to store.
@@ -297,6 +330,9 @@ def file_register(filename: str, category: str = "uploads", description: str = "
     Records file metadata so AI agents can find and serve files by context.
     The file must already exist on the Pi (in the appropriate category directory).
 
+    To transfer a file FROM this computer to the Pi, use file_upload instead.
+    file_upload auto-registers the file in the DB after upload.
+
     Args:
         filename: Name of the file on the Pi.
         category: File category: recordings, notes, logs, uploads.
@@ -363,6 +399,69 @@ def file_search(query: str, limit: int = 20) -> str:
 
 
 @mcp.tool()
+def file_upload(local_path: str, remote_name: str = "", description: str = "",
+                tags: str = "", project: str = "") -> str:
+    """Upload a file from this computer to the Pi Zero over WiFi.
+
+    Transfers the file contents via HTTP and auto-registers it in the Cortex
+    database with metadata. Only works when WiFi transport is active (not BLE).
+
+    Use connection_info to verify WiFi is connected before uploading.
+
+    Args:
+        local_path: Absolute path to the file on this computer.
+        remote_name: Filename on the Pi (defaults to local filename).
+        description: Human-readable description of the file.
+        tags: Comma-separated tags for categorization.
+        project: Project tag this file belongs to.
+    """
+    try:
+        bridge = _get_bridge_lazy()
+        if not hasattr(bridge, "upload_file"):
+            return ("Error: file_upload requires WiFi transport. "
+                    "Current transport does not support file transfer. "
+                    "Use connection_info to check WiFi status.")
+        if not os.path.isfile(local_path):
+            return "Error: file not found: {}".format(local_path)
+        result = bridge.upload_file(
+            local_path,
+            remote_name=remote_name or None,
+            description=description,
+            tags=tags,
+            project=project,
+        )
+        return "Uploaded: {} ({} bytes, file_id={})".format(
+            result.get("filename"), result.get("size"), result.get("file_id"))
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def file_download(category: str, filename: str, local_path: str = "") -> str:
+    """Download a file from the Pi Zero to this computer over WiFi.
+
+    Retrieves file contents via HTTP. Only works when WiFi transport is active.
+
+    Args:
+        category: File category on the Pi: recordings, notes, logs, uploads.
+        filename: Name of the file to download.
+        local_path: Local destination path (defaults to current directory + filename).
+    """
+    try:
+        bridge = _get_bridge_lazy()
+        if not hasattr(bridge, "download_file"):
+            return ("Error: file_download requires WiFi transport. "
+                    "Current transport does not support file transfer. "
+                    "Use connection_info to check WiFi status.")
+        dest = local_path or os.path.join(".", filename)
+        bridge.download_file(category, filename, dest)
+        size = os.path.getsize(dest)
+        return "Downloaded: {} -> {} ({} bytes)".format(filename, dest, size)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
 def send_message(message: str) -> str:
     """Send an arbitrary message to the Pi Zero through the bridge.
 
@@ -404,6 +503,8 @@ def connection_info() -> str:
     """Show current connection status and available ports.
 
     Lists detected serial ports, WiFi status, and the active connection details.
+    Transport hierarchy: WiFi HTTP (fastest) -> TCP daemon -> direct serial (BLE).
+    File upload/download only work over WiFi transport.
     """
     try:
         bridge = _get_bridge_lazy()

@@ -1,12 +1,13 @@
 # Cortex - Wearable AI Memory
 
-Cortex is a wearable AI memory system that gives any AI agent persistent memory across sessions. It consists of a USB dongle (ESP32-S3 BLE bridge) and a wearable Pi Zero 2 W that stores notes, sessions, activities, and searches in a local SQLite database.
+Cortex is a wearable AI memory system that gives any AI agent persistent memory across sessions. It consists of a Pi Zero 2 W (Cortex Core) that stores notes, sessions, activities, searches, and files in a local SQLite database, with an ESP32-S3 USB dongle (Cortex Link) providing BLE connectivity as a fallback.
 
 ```
-AI Agent <--MCP/CLI--> cortex-mcp ──TCP──> cortex-daemon <--USB Serial--> Cortex Link (ESP32) <--BLE--> Cortex Core (Pi Zero)
+WiFi (preferred):  AI Agent <--MCP--> cortex-mcp ──HTTP──> Cortex Core (Pi Zero)
+BLE (fallback):    AI Agent <--MCP--> cortex-mcp ──TCP──> daemon ──USB──> ESP32 ──BLE──> Pi Zero
 ```
 
-Multiple AI sessions share the same ESP32 through the daemon — no serial port conflicts.
+Transport is selected automatically. WiFi is 10-100x faster than BLE and supports file transfer. Multiple AI sessions share the same ESP32 through the daemon — no serial port conflicts.
 
 ## Quick Start
 
@@ -149,19 +150,47 @@ When connected via MCP, these tools are available to the AI agent:
 
 | Tool | Description |
 |------|-------------|
-| `ping` | Test round-trip BLE connectivity |
+| `ping` | Test round-trip connectivity |
 | `get_status` | Pi uptime, storage, recording state |
 | `send_note` | Store a timestamped note (with tags, project, type) |
 | `log_activity` | Log what program/file is being worked on |
 | `log_search` | Log a search query and source |
 | `session_start` | Begin a session (returns session_id) |
 | `session_end` | End a session with summary |
-| `get_context` | Full context: projects, sessions, notes, bugs, reminders |
+| `get_context` | Full context: projects, sessions, notes, bugs, files, reminders |
 | `query` | Query any table in the Cortex database |
 | `register_computer` | Register this machine with Cortex Core |
+| `file_register` | Register metadata for a file already on the Pi |
+| `file_list` | List registered files (by category or project) |
+| `file_search` | Search files by name, description, or tags |
+| `file_upload` | Upload a file to the Pi over WiFi |
+| `file_download` | Download a file from the Pi over WiFi |
 | `send_message` | Send a raw protocol message |
 | `read_responses` | Read buffered async messages |
-| `connection_info` | Show serial port status |
+| `connection_info` | Show transport status (WiFi/daemon/serial) |
+
+## Transport
+
+Cortex supports three transports, selected automatically in priority order:
+
+1. **WiFi HTTP** (preferred) — Direct HTTP to the Pi on port 8420 with bearer token auth. Fastest, supports file upload/download. WiFi credentials are discovered automatically via BLE when the ESP32 first connects.
+2. **TCP Daemon** — Shared serial port access via `cortex-daemon` on localhost:19750. Multiple AI sessions share one ESP32.
+3. **Direct Serial** — USB serial to ESP32 BLE bridge. Fallback when daemon is unavailable.
+
+WiFi discovery: When the Pi connects to the ESP32 over BLE, it sends a `DISCOVER:` message containing its IP, port, and auth token. This is saved to `~/.cortex-wifi.json` automatically — no manual configuration needed.
+
+## File Operations
+
+File transfer requires WiFi transport (not available over BLE).
+
+- **Upload**: `file_upload` sends a file from this computer to the Pi's `uploads/` directory and auto-registers it in the database.
+- **Download**: `file_download` retrieves a file from any category (recordings, notes, logs, uploads).
+- **Metadata**: `file_register` records metadata for files already on the Pi. `file_list` and `file_search` query the file database.
+
+The Pi's HTTP server (port 8420) also supports direct REST access:
+- `GET /files/<category>` — list files
+- `GET /files/<category>/<name>` — download
+- `POST /files/uploads` — upload (raw body + `X-Filename` header)
 
 ## Multi-Session / Daemon
 
@@ -201,9 +230,11 @@ CORTEX_DIRECT=1 cortex-mcp   # For MCP server
 | `CORTEX_BAUD` | `115200` | Baud rate |
 | `CORTEX_TIMEOUT` | `5` | Response timeout in seconds |
 | `CORTEX_DAEMON_PORT` | `19750` | TCP port for the daemon |
-| `CORTEX_DIRECT` | unset | Set to `1` to bypass daemon |
-
-Legacy `KEYMASTER_PORT`, `KEYMASTER_BAUD`, and `KEYMASTER_TIMEOUT` are also supported.
+| `CORTEX_DIRECT` | unset | Set to `1` to bypass daemon and WiFi |
+| `CORTEX_NO_WIFI` | unset | Set to `1` to skip WiFi, use BLE only |
+| `CORTEX_PI_HOST` | auto-discover | Pi IP address (overrides BLE discovery) |
+| `CORTEX_PI_PORT` | `8420` | Pi HTTP port |
+| `CORTEX_WIFI_TOKEN` | auto-discover | Bearer token (overrides `~/.cortex-wifi.token`) |
 
 ## Hardware
 
