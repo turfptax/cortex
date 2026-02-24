@@ -4,13 +4,18 @@ Manages the USB serial connection with background reading and
 thread-safe send/receive. Auto-detects ESP32-S3 devices.
 """
 
+import json
 import os
 import time
 import threading
 from collections import deque
+from pathlib import Path
 
 import serial
 import serial.tools.list_ports
+
+# Discovery config saved when Pi announces itself over BLE
+DISCOVERY_FILE = Path.home() / ".cortex-wifi.json"
 
 # ESP32-S3 USB-CDC vendor ID
 ESP32_S3_VID = 0x303A
@@ -189,6 +194,33 @@ class SerialBridge:
         if not self.is_connected:
             self.connect()
 
+    @staticmethod
+    def _handle_discovery(line):
+        """Intercept DISCOVER: messages from Pi and save WiFi config."""
+        if not line.startswith("DISCOVER:"):
+            return False
+        try:
+            payload = json.loads(line[9:])
+            ip = payload.get("ip")
+            port = payload.get("port")
+            token = payload.get("token", "")
+            if not ip:
+                return True
+
+            # Save discovery config
+            DISCOVERY_FILE.write_text(
+                json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+            )
+
+            # Also update the token file if a token was included
+            if token:
+                token_file = Path.home() / ".cortex-wifi.token"
+                token_file.write_text(token + "\n", encoding="utf-8")
+
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+        return True
+
     def _reader_loop(self):
         """Background thread: read serial lines into the queue."""
         buf = b""
@@ -203,6 +235,8 @@ class SerialBridge:
                             line = buf[:idx].decode("utf-8", errors="replace").strip()
                             buf = buf[idx + 1:]
                             if line:
+                                # Intercept discovery messages from Pi
+                                self._handle_discovery(line)
                                 self._rx_queue.append((time.time(), line))
                 else:
                     time.sleep(0.2)

@@ -19,24 +19,47 @@ import urllib.error
 
 DEFAULT_PI_HOST = "10.0.0.132"
 DEFAULT_PI_PORT = 8420
+DISCOVERY_FILE = os.path.join(os.path.expanduser("~"), ".cortex-wifi.json")
+
+
+def _load_discovery():
+    """Load discovered Pi config from ~/.cortex-wifi.json (set by BLE auto-discovery)."""
+    try:
+        with open(DISCOVERY_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
 
 
 def get_pi_host():
-    """Get Pi IP from env var or default."""
-    return os.environ.get("CORTEX_PI_HOST", DEFAULT_PI_HOST)
+    """Get Pi IP from env var, BLE discovery, or default."""
+    env = os.environ.get("CORTEX_PI_HOST", "")
+    if env:
+        return env
+    discovered = _load_discovery()
+    return discovered.get("ip", DEFAULT_PI_HOST)
 
 
 def get_pi_port():
-    """Get Pi HTTP port from env var or default."""
-    return int(os.environ.get("CORTEX_PI_PORT", str(DEFAULT_PI_PORT)))
+    """Get Pi HTTP port from env var, BLE discovery, or default."""
+    env = os.environ.get("CORTEX_PI_PORT", "")
+    if env:
+        return int(env)
+    discovered = _load_discovery()
+    return discovered.get("port", DEFAULT_PI_PORT)
 
 
 def get_wifi_token():
-    """Read WiFi bearer token from env var or token file."""
+    """Read WiFi bearer token from env var, BLE discovery, or token file."""
     token = os.environ.get("CORTEX_WIFI_TOKEN", "")
     if token:
         return token
-    # Try token file
+    # Try discovery file first (set by BLE auto-discovery)
+    discovered = _load_discovery()
+    token = discovered.get("token", "")
+    if token:
+        return token
+    # Fallback to standalone token file
     token_file = os.path.join(os.path.expanduser("~"), ".cortex-wifi.token")
     try:
         with open(token_file, "r") as f:

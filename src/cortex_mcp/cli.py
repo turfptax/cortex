@@ -231,9 +231,25 @@ def raw(ctx, message):
 
 @cli.command()
 def info():
-    """Show serial connection info and available ports."""
+    """Show connection info: WiFi, serial ports, daemon status."""
+    # WiFi status
+    try:
+        from cortex_mcp.wifi_bridge import is_pi_reachable, get_pi_host, get_pi_port, get_wifi_token
+        host = get_pi_host()
+        port = get_pi_port()
+        has_token = bool(get_wifi_token())
+        if has_token and is_pi_reachable(timeout=1.0):
+            click.echo("WiFi: connected (http://{}:{})".format(host, port))
+        elif has_token:
+            click.echo("WiFi: unreachable ({}:{})".format(host, port))
+        else:
+            click.echo("WiFi: no token (run 'wifi discovery' after BLE connects)")
+    except Exception:
+        click.echo("WiFi: not available")
+
+    # Serial ports
     ports = list_ports()
-    click.echo("Available ports:")
+    click.echo("\nSerial ports:")
     if ports:
         for p in ports:
             click.echo("  " + p)
@@ -242,9 +258,7 @@ def info():
 
     auto = find_esp32_port()
     if auto:
-        click.echo("\nAuto-detected ESP32: {}".format(auto))
-    else:
-        click.echo("\nNo ESP32 auto-detected.")
+        click.echo("Auto-detected ESP32: {}".format(auto))
 
     # Check daemon status
     try:
@@ -447,6 +461,69 @@ def files_db(ctx, output):
         click.echo("Done ({:.1f} KB)".format(size / 1024))
     except Exception as e:
         click.echo("Error: {}".format(e), err=True)
+
+
+# -- WiFi commands (headless Pi provisioning via BLE) --
+
+@cli.group()
+def wifi():
+    """Manage Pi WiFi over BLE (headless provisioning)."""
+    pass
+
+
+@wifi.command("status")
+@click.pass_context
+def wifi_status(ctx):
+    """Show the Pi's current WiFi connection status."""
+    bridge = _get_bridge(ctx)
+    click.echo(send_command(bridge, "wifi_status", timeout=10))
+
+
+@wifi.command("scan")
+@click.pass_context
+def wifi_scan(ctx):
+    """Scan for available WiFi networks from the Pi."""
+    click.echo("Scanning (this takes a few seconds)...")
+    bridge = _get_bridge(ctx)
+    result = send_command(bridge, "wifi_scan", timeout=20)
+    click.echo(result)
+
+
+@wifi.command("connect")
+@click.argument("ssid")
+@click.option("--password", "-p", prompt=True, hide_input=True,
+              confirmation_prompt=False, help="WiFi password.")
+@click.pass_context
+def wifi_connect(ctx, ssid, password):
+    """Connect the Pi to a WiFi network."""
+    click.echo("Connecting to '{}'...".format(ssid))
+    bridge = _get_bridge(ctx)
+    payload = {"ssid": ssid, "password": password}
+    result = send_command(bridge, "wifi_config", payload, timeout=30)
+    click.echo(result)
+
+
+@wifi.command("discovery")
+def wifi_discovery():
+    """Show the last auto-discovered Pi WiFi config."""
+    from cortex_mcp.wifi_bridge import DISCOVERY_FILE, get_pi_host, get_pi_port, get_wifi_token
+    click.echo("Discovery file: {}".format(DISCOVERY_FILE))
+    try:
+        with open(DISCOVERY_FILE, "r") as f:
+            data = json.load(f)
+        click.echo("  IP:    {}".format(data.get("ip", "?")))
+        click.echo("  Port:  {}".format(data.get("port", "?")))
+        click.echo("  Token: {}...".format(data.get("token", "")[:12]))
+    except FileNotFoundError:
+        click.echo("  (no discovery yet — Pi hasn't connected via BLE)")
+    except Exception as e:
+        click.echo("  Error: {}".format(e))
+
+    click.echo("\nActive config:")
+    click.echo("  Host:  {}".format(get_pi_host()))
+    click.echo("  Port:  {}".format(get_pi_port()))
+    has_token = bool(get_wifi_token())
+    click.echo("  Token: {}".format("configured" if has_token else "missing"))
 
 
 # -- Setup command --
