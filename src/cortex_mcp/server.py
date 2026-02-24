@@ -104,6 +104,8 @@ mcp = FastMCP(
         "- File metadata: file_register, file_list, file_search\n"
         "- File transfer (WiFi only): file_upload (local -> Pi), "
         "file_download (Pi -> local)\n"
+        "- WiFi provisioning: wifi_scan, wifi_status, wifi_config "
+        "(provision new networks remotely over BLE)\n"
         "- Diagnostics: ping, get_status, connection_info\n\n"
 
         "FILE OPERATIONS: Files on the Pi are organized by category: "
@@ -457,6 +459,52 @@ def file_download(category: str, filename: str, local_path: str = "") -> str:
         bridge.download_file(category, filename, dest)
         size = os.path.getsize(dest)
         return "Downloaded: {} -> {} ({} bytes)".format(filename, dest, size)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def wifi_scan() -> str:
+    """Scan for available WiFi networks near the Pi Zero.
+
+    Returns a list of networks with SSID, signal strength, and security type.
+    Uses nmcli (preferred) or iwlist as fallback. Takes a few seconds for rescan.
+    """
+    try:
+        return send_command(_get_bridge_lazy(), "wifi_scan", timeout=20)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def wifi_status() -> str:
+    """Get the Pi Zero's current WiFi connection status.
+
+    Returns current IP address, connected SSID, signal strength, and hostname.
+    """
+    try:
+        return send_command(_get_bridge_lazy(), "wifi_status", timeout=5)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def wifi_config(ssid: str, password: str = "") -> str:
+    """Connect the Pi Zero to a WiFi network (headless provisioning).
+
+    Configures and connects to the specified network using nmcli or wpa_cli.
+    Particularly useful when provisioning over BLE -- the Pi has no keyboard
+    or screen for manual WiFi setup.
+
+    Args:
+        ssid: The WiFi network name to connect to.
+        password: Network password (omit for open networks).
+    """
+    try:
+        payload = {"ssid": ssid}
+        if password:
+            payload["password"] = password
+        return send_command(_get_bridge_lazy(), "wifi_config", payload, timeout=40)
     except Exception as e:
         return "Error: {}".format(e)
 

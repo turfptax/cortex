@@ -165,6 +165,9 @@ When connected via MCP, these tools are available to the AI agent:
 | `file_search` | Search files by name, description, or tags |
 | `file_upload` | Upload a file to the Pi over WiFi |
 | `file_download` | Download a file from the Pi over WiFi |
+| `wifi_scan` | Scan for available WiFi networks near the Pi |
+| `wifi_status` | Get current WiFi connection (IP, SSID, signal) |
+| `wifi_config` | Connect the Pi to a WiFi network (headless provisioning) |
 | `send_message` | Send a raw protocol message |
 | `read_responses` | Read buffered async messages |
 | `connection_info` | Show transport status (WiFi/daemon/serial) |
