@@ -61,6 +61,21 @@ def _get_bridge():
 
 # Lazy singleton bridge instance (deferred to avoid 1s WiFi timeout on import)
 _bridge = None
+# Optional serial connection for ESP32 icon notifications when using WiFi
+_esp32_serial = None
+
+
+def _reset_bridge():
+    """Reset the bridge so the next call re-evaluates transport."""
+    global _bridge, _esp32_serial
+    _bridge = None
+    # Close ESP32 serial notification port so daemon/serial bridge can use it
+    if _esp32_serial is not None:
+        try:
+            _esp32_serial.close()
+        except Exception:
+            pass
+        _esp32_serial = None
 
 
 def _get_bridge_lazy():
@@ -69,6 +84,25 @@ def _get_bridge_lazy():
     if _bridge is None:
         _bridge = _get_bridge()
     return _bridge
+
+
+def _notify_esp32(command):
+    """Send a lightweight TOOL:<name> notification to the ESP32 for icon display.
+
+    Only used when WiFi transport is active (ESP32 doesn't see commands).
+    Fire-and-forget — failures are silently ignored.
+    """
+    global _esp32_serial
+    try:
+        if _esp32_serial is None:
+            port = find_esp32_port()
+            if not port:
+                return
+            import serial
+            _esp32_serial = serial.Serial(port, 115200, timeout=0.1)
+        _esp32_serial.write("TOOL:{}\n".format(command).encode("utf-8"))
+    except Exception:
+        _esp32_serial = None  # Reset on error
 
 # MCP server
 mcp = FastMCP(
@@ -125,10 +159,7 @@ def ping() -> str:
     Use this to verify the full chain: Computer -> ESP32 -> BLE -> Pi.
     """
     try:
-        lines = _get_bridge_lazy().send_and_wait("CMD:ping", timeout=5)
-        if lines:
-            return "Response: " + " | ".join(lines)
-        return "No response (timeout). Check Cortex Link and Core are connected."
+        return send_command(_get_bridge_lazy(), "ping", timeout=5)
     except Exception as e:
         return "Error: {}".format(e)
 
