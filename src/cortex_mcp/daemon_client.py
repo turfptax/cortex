@@ -65,7 +65,13 @@ class DaemonBridge:
                 buf += chunk
 
             if buf:
-                return json.loads(buf.decode("utf-8").strip())
+                resp = json.loads(buf.decode("utf-8").strip())
+                # Re-read token on auth failure (daemon may have restarted)
+                if not resp.get("ok") and "auth" in resp.get("error", "").lower():
+                    fresh_token = read_secret() or ""
+                    if fresh_token and fresh_token != self._token:
+                        self._token = fresh_token
+                return resp
             return {"ok": False, "error": "No response from daemon"}
         except socket.timeout:
             return {"ok": False, "error": "Daemon request timed out"}
@@ -231,15 +237,12 @@ def ensure_daemon(serial_port=None, baud=None, timeout=None):
 
     try:
         if sys.platform == "win32":
-            # Detached process on Windows
-            CREATE_NO_WINDOW = 0x08000000
-            DETACHED_PROCESS = 0x00000008
+            # Detached process with visible console window on Windows
+            # so the user can see the daemon banner and status
+            CREATE_NEW_CONSOLE = 0x00000010
             subprocess.Popen(
                 cmd,
-                creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
+                creationflags=CREATE_NEW_CONSOLE,
             )
         else:
             # Detached process on Linux/Mac

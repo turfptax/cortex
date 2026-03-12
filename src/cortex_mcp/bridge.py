@@ -196,26 +196,19 @@ class SerialBridge:
 
     @staticmethod
     def _handle_discovery(line):
-        """Intercept DISCOVER: messages from Pi and save WiFi config."""
+        """Intercept DISCOVER: messages from Pi and save WiFi config (ip + port)."""
         if not line.startswith("DISCOVER:"):
             return False
         try:
             payload = json.loads(line[9:])
             ip = payload.get("ip")
-            port = payload.get("port")
-            token = payload.get("token", "")
             if not ip:
                 return True
 
-            # Save discovery config
+            # Save discovery config (ip + port for WiFi bridge)
             DISCOVERY_FILE.write_text(
                 json.dumps(payload, indent=2) + "\n", encoding="utf-8"
             )
-
-            # Also update the token file if a token was included
-            if token:
-                token_file = Path.home() / ".cortex-wifi.token"
-                token_file.write_text(token + "\n", encoding="utf-8")
 
         except (json.JSONDecodeError, OSError, ValueError):
             pass

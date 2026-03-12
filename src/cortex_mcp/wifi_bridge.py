@@ -10,8 +10,10 @@ Fallback (when Pi WiFi unreachable):
     AI Agent -> MCP Server -> DaemonBridge -> USB Serial -> ESP32 -> BLE -> Pi
 
 Uses only urllib.request (stdlib) -- no new dependencies.
+Auth: HTTP Basic Auth (username:password) instead of bearer tokens.
 """
 
+import base64
 import json
 import os
 import urllib.request
@@ -19,6 +21,8 @@ import urllib.error
 
 DEFAULT_PI_HOST = "10.0.0.132"
 DEFAULT_PI_PORT = 8420
+DEFAULT_PI_USERNAME = "cortex"
+DEFAULT_PI_PASSWORD = "cortex"
 DISCOVERY_FILE = os.path.join(os.path.expanduser("~"), ".cortex-wifi.json")
 
 
@@ -49,23 +53,18 @@ def get_pi_port():
     return discovered.get("port", DEFAULT_PI_PORT)
 
 
-def get_wifi_token():
-    """Read WiFi bearer token from env var, BLE discovery, or token file."""
-    token = os.environ.get("CORTEX_WIFI_TOKEN", "")
-    if token:
-        return token
-    # Try discovery file first (set by BLE auto-discovery)
-    discovered = _load_discovery()
-    token = discovered.get("token", "")
-    if token:
-        return token
-    # Fallback to standalone token file
-    token_file = os.path.join(os.path.expanduser("~"), ".cortex-wifi.token")
-    try:
-        with open(token_file, "r") as f:
-            return f.read().strip()
-    except (FileNotFoundError, OSError):
-        return ""
+def get_pi_credentials():
+    """Get Pi HTTP Basic Auth credentials from env vars or defaults."""
+    username = os.environ.get("CORTEX_PI_USERNAME", DEFAULT_PI_USERNAME)
+    password = os.environ.get("CORTEX_PI_PASSWORD", DEFAULT_PI_PASSWORD)
+    return username, password
+
+
+def _make_basic_auth_header(username, password):
+    """Build HTTP Basic Auth header value."""
+    credentials = "{}:{}".format(username, password)
+    encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+    return "Basic {}".format(encoded)
 
 
 def is_pi_reachable(host=None, port=None, timeout=1.0):
@@ -90,22 +89,24 @@ class WiFiBridge:
     """Drop-in replacement for SerialBridge/DaemonBridge using HTTP to Pi.
 
     Provides the same send_and_wait() interface so the MCP server and CLI
-    can use it transparently.
+    can use it transparently. Uses HTTP Basic Auth for authentication.
     """
 
-    def __init__(self, host=None, port=None, token=None):
+    def __init__(self, host=None, port=None, username=None, password=None):
         self._host = host or get_pi_host()
         self._port = port or get_pi_port()
-        self._token = token or get_wifi_token()
+        _user, _pass = get_pi_credentials()
+        self._username = username or _user
+        self._password = password or _pass
         self._base = "http://{}:{}".format(self._host, self._port)
+        self._auth_header = _make_basic_auth_header(self._username, self._password)
 
     def _request(self, method, path, body=None, timeout=10, stream=False):
         """Make an authenticated HTTP request."""
         url = self._base + path
         data = json.dumps(body).encode("utf-8") if body else None
         req = urllib.request.Request(url, data=data, method=method)
-        if self._token:
-            req.add_header("Authorization", "Bearer {}".format(self._token))
+        req.add_header("Authorization", self._auth_header)
         if data:
             req.add_header("Content-Type", "application/json")
         resp = urllib.request.urlopen(req, timeout=timeout)
@@ -199,8 +200,7 @@ class WiFiBridge:
         """Download a file from the Pi to a local path."""
         url = "{}/files/{}/{}".format(self._base, category, filename)
         req = urllib.request.Request(url)
-        if self._token:
-            req.add_header("Authorization", "Bearer {}".format(self._token))
+        req.add_header("Authorization", self._auth_header)
         resp = urllib.request.urlopen(req, timeout=120)
         with open(local_path, "wb") as f:
             while True:
@@ -217,8 +217,7 @@ class WiFiBridge:
             data = f.read()
         url = "{}/files/uploads".format(self._base)
         req = urllib.request.Request(url, data=data, method="POST")
-        if self._token:
-            req.add_header("Authorization", "Bearer {}".format(self._token))
+        req.add_header("Authorization", self._auth_header)
         req.add_header("X-Filename", filename)
         req.add_header("Content-Length", str(len(data)))
         if description:
@@ -234,8 +233,7 @@ class WiFiBridge:
         """Download the cortex.db database snapshot."""
         url = "{}/files/db".format(self._base)
         req = urllib.request.Request(url)
-        if self._token:
-            req.add_header("Authorization", "Bearer {}".format(self._token))
+        req.add_header("Authorization", self._auth_header)
         resp = urllib.request.urlopen(req, timeout=120)
         with open(local_path, "wb") as f:
             while True:

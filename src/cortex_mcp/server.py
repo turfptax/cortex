@@ -41,8 +41,8 @@ def _get_bridge():
     # Try WiFi first (direct to Pi, bypasses ESP32 BLE chain)
     if not os.environ.get("CORTEX_NO_WIFI"):
         try:
-            from cortex_mcp.wifi_bridge import WiFiBridge, is_pi_reachable, get_wifi_token
-            if get_wifi_token() and is_pi_reachable(timeout=1.0):
+            from cortex_mcp.wifi_bridge import WiFiBridge, is_pi_reachable
+            if is_pi_reachable(timeout=1.0):
                 return WiFiBridge()
         except Exception:
             pass
@@ -541,6 +541,47 @@ def wifi_config(ssid: str, password: str = "") -> str:
 
 
 @mcp.tool()
+def shell_exec(command: str, timeout: int = 30, cwd: str = "") -> str:
+    """Execute a shell command on the Pi Zero and return the output.
+
+    Runs the command on the Pi via the active transport (WiFi or BLE).
+    Useful for deploying, debugging, and managing the Pi remotely.
+
+    Args:
+        command: The shell command to execute (e.g. "ls -la", "systemctl status cortex-core").
+        timeout: Max seconds to wait for the command (default 30, max 120).
+        cwd: Working directory on the Pi (defaults to home directory).
+    """
+    try:
+        payload = {"command": command, "timeout": min(timeout, 120)}
+        if cwd:
+            payload["cwd"] = cwd
+        return send_command(
+            _get_bridge_lazy(), "shell_exec", payload,
+            timeout=min(timeout + 5, 125),
+        )
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
+def pet_analytics(days: int = 7) -> str:
+    """Get pet analytics: mood trends, interaction frequency, stage progress.
+
+    Returns daily mood averages, mood distribution, inference performance
+    stats, and stage progression history.
+
+    Args:
+        days: Number of days to analyze (default 7, max 90).
+    """
+    try:
+        payload = {"days": min(days, 90)}
+        return send_command(_get_bridge_lazy(), "pet_analytics", payload, timeout=10)
+    except Exception as e:
+        return "Error: {}".format(e)
+
+
+@mcp.tool()
 def send_message(message: str) -> str:
     """Send an arbitrary message to the Pi Zero through the bridge.
 
@@ -591,16 +632,13 @@ def connection_info() -> str:
 
         # WiFi status
         try:
-            from cortex_mcp.wifi_bridge import is_pi_reachable, get_pi_host, get_pi_port, get_wifi_token
+            from cortex_mcp.wifi_bridge import is_pi_reachable, get_pi_host, get_pi_port
             host = get_pi_host()
             port = get_pi_port()
-            has_token = bool(get_wifi_token())
-            if has_token and is_pi_reachable(timeout=1.0):
+            if is_pi_reachable(timeout=1.0):
                 info += "WiFi: connected (http://{}:{})\n".format(host, port)
-            elif has_token:
-                info += "WiFi: unreachable ({}:{})\n".format(host, port)
             else:
-                info += "WiFi: no token configured\n"
+                info += "WiFi: unreachable ({}:{})\n".format(host, port)
         except Exception:
             info += "WiFi: not available\n"
 

@@ -100,6 +100,13 @@ class DaemonHandler(socketserver.StreamRequestHandler):
 
             cmd = request.get("cmd", "")
             response = self.server.daemon.handle_command(cmd, request)
+            # Log request activity to console
+            if cmd not in ("ping", "info"):
+                msg = request.get("message", "")
+                ts = time.strftime("%H:%M:%S")
+                ok = "ok" if response.get("ok") else "ERR"
+                label = msg[:50] if msg else cmd
+                print("[{}]  {} -> {} ({})".format(ts, cmd, label, ok))
             self._respond(response)
 
         except (ConnectionResetError, BrokenPipeError, OSError):
@@ -209,6 +216,13 @@ class CortexDaemon:
         """Start the daemon: connect to serial, serve TCP forever."""
         self._start_time = time.time()
 
+        # Set console window title on Windows
+        if sys.platform == "win32":
+            try:
+                os.system("title Cortex Daemon — MCP Serial Bridge")
+            except Exception:
+                pass
+
         # Connect to ESP32
         try:
             self.bridge.connect()
@@ -224,14 +238,31 @@ class CortexDaemon:
         signal.signal(signal.SIGINT, lambda *_: self._shutdown())
         signal.signal(signal.SIGTERM, lambda *_: self._shutdown())
 
-        print("Cortex daemon started (PID {})".format(os.getpid()))
-        print("  Serial: {} @ {}".format(port_name, self.bridge.baud_rate))
-        print("  TCP:    {}:{}".format(self.host, self.daemon_port))
+        # Banner
+        print("=" * 56)
+        print("  CORTEX DAEMON — MCP Serial Bridge")
+        print("=" * 56)
+        print()
+        print("  PID:      {}".format(os.getpid()))
+        print("  Serial:   {} @ {}".format(port_name, self.bridge.baud_rate))
+        print("  TCP:      {}:{}".format(self.host, self.daemon_port))
+        print()
+        print("  This process bridges Claude <-> ESP32 <-> Pi Zero.")
+        print("  Closing this window will disconnect Cortex.")
+        print("  Press Ctrl+C to shut down gracefully.")
+        print()
+        print("-" * 56)
 
         # Start TCP server
         self._server = CortexDaemonServer(
             (self.host, self.daemon_port), DaemonHandler, self
         )
+
+        # Start status heartbeat thread
+        self._status_thread = threading.Thread(
+            target=self._status_heartbeat, daemon=True
+        )
+        self._status_thread.start()
 
         try:
             self._server.serve_forever()
@@ -240,6 +271,26 @@ class CortexDaemon:
         finally:
             self._cleanup()
 
+    def _status_heartbeat(self):
+        """Print periodic status updates to the console."""
+        last_served = 0
+        while self._server:
+            time.sleep(30)
+            if not self._server:
+                break
+            uptime = time.time() - self._start_time
+            mins, secs = divmod(int(uptime), 60)
+            hours, mins = divmod(mins, 60)
+            served = self._clients_served
+            new = served - last_served
+            last_served = served
+            connected = self.bridge.is_connected
+            status = "connected" if connected else "DISCONNECTED"
+            ts = time.strftime("%H:%M:%S")
+            print("[{}]  uptime {}h{:02d}m | serial {} | requests {} (+{})".format(
+                ts, hours, mins, status, served, new
+            ))
+
     def _shutdown(self):
         """Gracefully shut down the daemon."""
         if self._server:
@@ -247,14 +298,22 @@ class CortexDaemon:
 
     def _cleanup(self):
         """Clean up resources on exit."""
-        print("\nDaemon shutting down...")
+        print()
+        print("-" * 56)
+        print("  Cortex daemon shutting down...")
         try:
             self.bridge.disconnect()
         except Exception:
             pass
         _remove_lock_file()
         _remove_secret_file()
-        print("Done.")
+        uptime = time.time() - self._start_time if self._start_time else 0
+        mins = int(uptime) // 60
+        print("  Served {} requests over {} minutes.".format(
+            self._clients_served, mins
+        ))
+        print("  Goodbye.")
+        print("=" * 56)
 
 
 def _write_lock_file(pid, port):
