@@ -19,7 +19,7 @@ import os
 import urllib.request
 import urllib.error
 
-DEFAULT_PI_HOST = "10.0.0.132"
+DEFAULT_PI_HOST = "10.0.0.25"
 DEFAULT_PI_PORT = 8420
 DEFAULT_PI_USERNAME = "cortex"
 DEFAULT_PI_PASSWORD = "cortex"
